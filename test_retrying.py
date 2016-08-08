@@ -18,6 +18,7 @@ import unittest
 from retrying import RetryError
 from retrying import Retrying
 from retrying import retry
+import asyncio
 
 
 class TestStopConditions(unittest.TestCase):
@@ -467,6 +468,22 @@ class TestBeforeAfterAttempts(unittest.TestCase):
         _test_after()
 
         self.assertTrue(TestBeforeAfterAttempts._attempt_number is 2)
+
+
+@retry(stop_max_attempt_number=10)
+async def do_something_unreliable_with_exception(thing):
+    return thing.go()
+
+async def unreliable_exception_wrapper(thing):
+    return await do_something_unreliable_with_exception(thing)
+
+
+class TestDecoratorWrapperAsync(unittest.TestCase):
+    def test_retry_with_exception(self):
+        loop = asyncio.get_event_loop()
+        thing = NoIOErrorAfterCount(5)
+        result = loop.run_until_complete(unreliable_exception_wrapper(thing))
+        self.assertTrue(result)
 
 if __name__ == '__main__':
     unittest.main()

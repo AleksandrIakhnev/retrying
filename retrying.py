@@ -17,6 +17,7 @@ import six
 import sys
 import time
 import traceback
+import asyncio
 
 
 # sys.maxint / 2, since Python 3.2 doesn't have a sys.maxint...
@@ -54,7 +55,13 @@ def retry(*dargs, **dkw):
             def wrapped_f(*args, **kw):
                 return Retrying(*dargs, **dkw).call(f, *args, **kw)
 
-            return wrapped_f
+            if asyncio.iscoroutinefunction(f):
+                async def async_func(*args, **kw):
+                    return await Retrying(*dargs, **dkw).call_async(f, *args, **kw)
+
+                return async_func
+            else:
+                return wrapped_f
 
         return wrap
 
@@ -246,6 +253,41 @@ class Retrying(object):
                     jitter = random.random() * self._wait_jitter_max
                     sleep = sleep + max(0, jitter)
                 time.sleep(sleep / 1000.0)
+
+            attempt_number += 1
+
+    async def call_async(self, fn, *args, **kwargs):
+        start_time = int(round(time.time() * 1000))
+        attempt_number = 1
+        while True:
+            if self._before_attempts:
+                self._before_attempts(attempt_number)
+
+            try:
+                attempt = Attempt(await fn(*args, **kwargs), attempt_number, False)
+            except:
+                tb = sys.exc_info()
+                attempt = Attempt(tb, attempt_number, True)
+
+            if not self.should_reject(attempt):
+                return attempt.get(self._wrap_exception)
+
+            if self._after_attempts:
+                self._after_attempts(attempt_number)
+
+            delay_since_first_attempt_ms = int(round(time.time() * 1000)) - start_time
+            if self.stop(attempt_number, delay_since_first_attempt_ms):
+                if not self._wrap_exception and attempt.has_exception:
+                    # get() on an attempt with an exception should cause it to be raised, but raise just in case
+                    raise attempt.get()
+                else:
+                    raise RetryError(attempt)
+            else:
+                sleep = self.wait(attempt_number, delay_since_first_attempt_ms)
+                if self._wait_jitter_max:
+                    jitter = random.random() * self._wait_jitter_max
+                    sleep = sleep + max(0, jitter)
+                asyncio.sleep(sleep / 1000.0)
 
             attempt_number += 1
 
